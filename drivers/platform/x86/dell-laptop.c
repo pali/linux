@@ -794,6 +794,7 @@ static void touchpad_led_exit(void)
 
 enum kbd_led_request {
 	SET_LEVEL,
+	SET_TIMEOUT,
 };
 
 static void kbd_led_send_request(enum kbd_led_request operation, u16 value)
@@ -822,6 +823,9 @@ static void kbd_led_send_request(enum kbd_led_request operation, u16 value)
 		}
 		buffer->input[2] &= ~(0xFF << 16);
 		buffer->input[2] |= value << 16;
+	} else if (operation == SET_TIMEOUT) {
+		buffer->input[1] &= ~(0xFF << 24);
+		buffer->input[1] |= value << 24;
 	}
 	dell_send_request(buffer, 4, 11);
 	if (buffer->output[0]) {
@@ -833,6 +837,76 @@ static void kbd_led_send_request(enum kbd_led_request operation, u16 value)
 out:
 	release_buffer();
 }
+
+static ssize_t kbd_led_timeout_store(struct device *dev,
+				     struct device_attribute *attr,
+				     const char *buf, size_t count)
+{
+	int value;
+	u8 max[4] = { 0 };
+
+	sscanf(buf, "%d\n", &value);
+
+	get_buffer();
+	buffer->input[0] = 0x0;
+	dell_send_request(buffer, 4, 11);
+	max[0] = buffer->output[3];
+	max[1] = buffer->output[3] >> 8;
+	max[2] = buffer->output[3] >> 16;
+	max[3] = buffer->output[3] >> 24;
+	release_buffer();
+
+	/* Convert timeout */
+	if (value <= max[0] && max[0]) {
+		value = clamp_t(int, value, 0, max[0]);
+	} else if (value/60 <= max[1] && max[1]) {
+		value /= value/60;
+		value |= 1 << 6;
+	} else if (value/(60*60) <= max[2] && max[2]) {
+		value /= (60*60);
+		value |= 2 << 6;
+	} else if (value/(60*60*24) <= max[3] && max[3]) {
+		value /= (60*60*24);
+		value |= 3 << 6;
+	} else {
+		return -EINVAL;
+	}
+
+	kbd_led_send_request(SET_TIMEOUT, value);
+
+	return count;
+}
+
+static ssize_t kbd_led_timeout_show(struct device *dev,
+				    struct device_attribute *attr, char *buf)
+{
+	int ret;
+
+	get_buffer();
+	buffer->input[0] = 0x1;
+	dell_send_request(buffer, 4, 11);
+	ret = (buffer->output[1] >> 24) & 0xFF;
+	release_buffer();
+
+	/* Convert timeout */
+	if (ret & (1 << 6))
+		ret = (ret & 0x1F)*60;
+	else if (ret & (2 << 6))
+		ret = (ret & 0x1F)*60*60;
+	else if (ret & (3 << 6))
+		ret = (ret & 0x1F)*60*60*24;
+
+	return sprintf(buf, "%d\n", ret);
+}
+
+static DEVICE_ATTR(illumination_timeout, S_IRUGO | S_IWUSR,
+		   kbd_led_timeout_show, kbd_led_timeout_store);
+
+static struct attribute *kbd_led_attrs[] = {
+	&dev_attr_illumination_timeout.attr,
+	NULL,
+};
+ATTRIBUTE_GROUPS(kbd_led);
 
 static enum led_brightness kbd_led_level_get(struct led_classdev *led_cdev)
 {
@@ -857,6 +931,7 @@ static struct led_classdev kbd_led = {
 	.name           = "dell::kbd_backlight",
 	.brightness_set = kbd_led_level_set,
 	.brightness_get = kbd_led_level_get,
+	.groups         = kbd_led_groups,
 };
 
 static bool __init kbd_led_supported(void)
