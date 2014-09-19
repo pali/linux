@@ -277,6 +277,8 @@ static DEFINE_MUTEX(buffer_mutex);
 
 static int hwswitch_state;
 
+static bool kbd_led_present;
+
 static void get_buffer(void)
 {
 	mutex_lock(&buffer_mutex);
@@ -790,6 +792,113 @@ static void touchpad_led_exit(void)
 	led_classdev_unregister(&touchpad_led);
 }
 
+enum kbd_led_request {
+	SET_LEVEL,
+};
+
+static void kbd_led_send_request(enum kbd_led_request operation, u16 value)
+{
+	get_buffer();
+
+	buffer->input[0] = 0x1;
+	dell_send_request(buffer, 4, 11);
+	if (buffer->output[0]) {
+		pr_err("Failed to get current keyboard backlight "
+		       "configuration (%d)\n", buffer->output[0]);
+		goto out;
+	}
+
+	buffer->input[0] = 0x2;
+	buffer->input[1] = buffer->output[1];
+	/* Exclude current ALS value */
+	buffer->input[2] = buffer->output[2] & ~(0xFF << 8);
+
+	if (operation == SET_LEVEL) {
+		buffer->input[1] = buffer->output[1];
+		if (value != 0 && buffer->input[1] & (1 << 0)) {
+			/* Make sure the illumination mode is not Always Off.
+			 * The backlight level won't change otherwise. */
+			buffer->input[1] &= ~(0xFFFF);
+		}
+		buffer->input[2] &= ~(0xFF << 16);
+		buffer->input[2] |= value << 16;
+	}
+	dell_send_request(buffer, 4, 11);
+	if (buffer->output[0]) {
+		pr_err("Failed to set keyboard backlight configuration (%d)\n",
+		       buffer->output[0]);
+		goto out;
+	}
+
+out:
+	release_buffer();
+}
+
+static enum led_brightness kbd_led_level_get(struct led_classdev *led_cdev)
+{
+	int level;
+
+	get_buffer();
+	buffer->input[0] = 0x1;
+	dell_send_request(buffer, 4, 11);
+	level = (buffer->output[2] >> 16) & 0xFF;
+	release_buffer();
+
+	return level;
+}
+
+static void kbd_led_level_set(struct led_classdev *led_cdev,
+			      enum led_brightness value)
+{
+	kbd_led_send_request(SET_LEVEL, value);
+}
+
+static struct led_classdev kbd_led = {
+	.name           = "dell::kbd_backlight",
+	.brightness_set = kbd_led_level_set,
+	.brightness_get = kbd_led_level_get,
+};
+
+static bool __init kbd_led_supported(void)
+{
+	int ret;
+
+	get_buffer();
+
+	buffer->input[0] = 0x1;
+	dell_send_request(buffer, 4, 11);
+	ret = !(buffer->output[0]);
+
+	buffer->input[0] = 0x0;
+	dell_send_request(buffer, 4, 11);
+	/* Not supported if max illumination level is 0
+	 * and illumination type is not backlight */
+	ret = ret &&
+	      !(buffer->output[0]) &&
+	      ((buffer->output[2] >> 16) & 0xFF) &&
+	      ((buffer->output[1] >> 24) & 0xFF) == 2;
+
+	release_buffer();
+
+	return ret;
+}
+
+static int __init kbd_led_init(struct device *dev)
+{
+	get_buffer();
+	buffer->input[0] = 0x0;
+	dell_send_request(buffer, 4, 11);
+	kbd_led.max_brightness = (buffer->output[2] >> 16) & 0xFF;
+	release_buffer();
+
+	return led_classdev_register(dev, &kbd_led);
+}
+
+static void kbd_led_exit(void)
+{
+	led_classdev_unregister(&kbd_led);
+}
+
 static int __init dell_init(void)
 {
 	int max_intensity = 0;
@@ -841,6 +950,10 @@ static int __init dell_init(void)
 
 	if (quirks && quirks->touchpad_led)
 		touchpad_led_init(&platform_device->dev);
+
+	if (kbd_led_supported())
+		if (!kbd_led_init(&platform_device->dev))
+			kbd_led_present = true;
 
 	dell_laptop_dir = debugfs_create_dir("dell_laptop", NULL);
 	if (dell_laptop_dir != NULL)
@@ -909,6 +1022,8 @@ static void __exit dell_exit(void)
 	debugfs_remove_recursive(dell_laptop_dir);
 	if (quirks && quirks->touchpad_led)
 		touchpad_led_exit();
+	if (kbd_led_present)
+		kbd_led_exit();
 	i8042_remove_filter(dell_laptop_i8042_filter);
 	cancel_delayed_work_sync(&dell_rfkill_work);
 	backlight_device_unregister(dell_backlight_device);
