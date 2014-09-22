@@ -796,6 +796,8 @@ enum kbd_led_request {
 	SET_LEVEL,
 	SET_TIMEOUT,
 	SET_MODE,
+	TRIGGER_ENABLE,
+	TRIGGER_DISABLE,
 };
 
 static void kbd_led_send_request(enum kbd_led_request operation, u16 value)
@@ -835,6 +837,10 @@ static void kbd_led_send_request(enum kbd_led_request operation, u16 value)
 		if ((buffer->output[1] & BIT(0)) == 1 &&
 		    !(buffer->output[2] & (0xFF << 16)))
 			buffer->input[2] |= 1 << 16;
+	} else if (operation == TRIGGER_ENABLE) {
+		buffer->input[1] |= value << 16;
+	} else if (operation == TRIGGER_DISABLE) {
+		buffer->input[1] &= ~(value << 16);
 	}
 	dell_send_request(buffer, 4, 11);
 	if (buffer->output[0]) {
@@ -998,9 +1004,92 @@ static ssize_t kbd_led_mode_show(struct device *dev,
 static DEVICE_ATTR(illumination_mode, S_IRUGO | S_IWUSR,
 		   kbd_led_mode_show, kbd_led_mode_store);
 
+#define TRIGGER_LEN 20
+static const char *triggers[] = {
+	"keystroke",
+	"touchpad",
+	"pointing-stick",
+	"mouse"
+};
+
+static ssize_t kbd_led_triggers_store(struct device *dev,
+				      struct device_attribute *attr,
+				      const char *buf, size_t count)
+{
+	u8 supported_triggers;
+	char trigger[TRIGGER_LEN + 1];
+	int i;
+
+	i = sscanf(buf, "%20s", trigger); /* TRIGGER_LEN */
+	if (i != 1)
+		return -EINVAL;
+
+	if (!(trigger[0] == '+' || trigger[0] == '-'))
+		return -EINVAL;
+
+	get_buffer();
+	buffer->input[0] = 0x0;
+	dell_send_request(buffer, 4, 11);
+	supported_triggers = buffer->output[2];
+	release_buffer();
+
+	for (i = 0; i < ARRAY_SIZE(triggers); i++)
+		if (!strnicmp(trigger + 1, triggers[i], TRIGGER_LEN))
+			break;
+
+	if (i > ARRAY_SIZE(triggers))
+		return -EINVAL;
+
+	if (!(supported_triggers & BIT(i)))
+		return -EINVAL;
+
+	if (trigger[0] == '+')
+		kbd_led_send_request(TRIGGER_ENABLE, 1 << i);
+	else
+		kbd_led_send_request(TRIGGER_DISABLE, 1 << i);
+
+	return count;
+}
+
+static ssize_t kbd_led_triggers_show(struct device *dev,
+				     struct device_attribute *attr, char *buf)
+{
+	u8 enabled_triggers;
+	u8 supported_triggers;
+	int len = 0;
+	int i;
+
+	get_buffer();
+	buffer->input[0] = 0x0;
+	dell_send_request(buffer, 4, 11);
+	supported_triggers = buffer->output[2];
+
+	buffer->input[0] = 0x1;
+	dell_send_request(buffer, 4, 11);
+	enabled_triggers = buffer->output[1] >> 16;
+	release_buffer();
+
+	for (i = 0; i < ARRAY_SIZE(triggers); i++) {
+		if (!(supported_triggers & BIT(i)))
+			continue;
+
+		if (enabled_triggers & BIT(i))
+			len += sprintf(buf + len, "+%s ", triggers[i]);
+		else
+			len += sprintf(buf + len, "-%s ", triggers[i]);
+	}
+	len += sprintf(buf + len, "\n");
+
+	return len;
+}
+
+static DEVICE_ATTR(illumination_triggers, S_IRUGO | S_IWUSR,
+		   kbd_led_triggers_show, kbd_led_triggers_store);
+
 static struct attribute *kbd_led_attrs[] = {
 	&dev_attr_illumination_timeout.attr,
 	&dev_attr_illumination_mode.attr,
+	&dev_attr_illumination_triggers.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(kbd_led);
