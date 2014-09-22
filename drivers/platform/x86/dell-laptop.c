@@ -795,6 +795,7 @@ static void touchpad_led_exit(void)
 enum kbd_led_request {
 	SET_LEVEL,
 	SET_TIMEOUT,
+	SET_MODE,
 };
 
 static void kbd_led_send_request(enum kbd_led_request operation, u16 value)
@@ -826,6 +827,14 @@ static void kbd_led_send_request(enum kbd_led_request operation, u16 value)
 	} else if (operation == SET_TIMEOUT) {
 		buffer->input[1] &= ~(0xFF << 24);
 		buffer->input[1] |= value << 24;
+	} else if (operation == SET_MODE) {
+		buffer->input[1] &= ~(0xFFFF);
+		buffer->input[1] |= value;
+		/* If current mode is Always off and level is 0,
+		 * set level to 1 */
+		if ((buffer->output[1] & BIT(0)) == 1 &&
+		    !(buffer->output[2] & (0xFF << 16)))
+			buffer->input[2] |= 1 << 16;
 	}
 	dell_send_request(buffer, 4, 11);
 	if (buffer->output[0]) {
@@ -902,8 +911,96 @@ static ssize_t kbd_led_timeout_show(struct device *dev,
 static DEVICE_ATTR(illumination_timeout, S_IRUGO | S_IWUSR,
 		   kbd_led_timeout_show, kbd_led_timeout_store);
 
+#define MODE_LEN 15
+static const char *illumination_modes[] = {
+	"none",
+	"always-on",
+	"als",
+	"als-input",
+	"input",
+	"input-25",
+	"input-50",
+	"input-75",
+	"input-100"
+};
+
+static ssize_t kbd_led_mode_store(struct device *dev,
+				  struct device_attribute *attr,
+				  const char *buf, size_t count)
+{
+	u16 supported_modes;
+	char mode[MODE_LEN + 1];
+	int i;
+
+	i = sscanf(buf, "%15s", mode); /* MODE_LEN */
+	if (i != 1)
+		return -EINVAL;
+
+	get_buffer();
+	buffer->input[0] = 0x0;
+	dell_send_request(buffer, 4, 11);
+	supported_modes = buffer->output[1];
+	release_buffer();
+
+	for (i = 0; i < ARRAY_SIZE(illumination_modes); i++)
+		if (!strnicmp(mode, illumination_modes[i], MODE_LEN))
+			break;
+
+	if (i > ARRAY_SIZE(illumination_modes))
+		return -EINVAL;
+
+	if (!(supported_modes & BIT(i)))
+		return -EINVAL;
+
+	kbd_led_send_request(SET_MODE, 1 << i);
+
+	return count;
+}
+
+static ssize_t kbd_led_mode_show(struct device *dev,
+				 struct device_attribute *attr, char *buf)
+{
+	u16 enabled_modes;
+	u16 supported_modes;
+	int len = 0;
+	int i;
+
+	get_buffer();
+	buffer->input[0] = 0x0;
+	dell_send_request(buffer, 4, 11);
+	supported_modes = buffer->output[1];
+
+	buffer->input[0] = 0x1;
+	dell_send_request(buffer, 4, 11);
+	enabled_modes = buffer->output[1];
+	release_buffer();
+
+	for (i = 0; i < ARRAY_SIZE(illumination_modes); i++) {
+		if (!(supported_modes & BIT(i)))
+			continue;
+
+		if (enabled_modes & BIT(i)) {
+			if (!((buffer->output[2] >> 16) & 0xFF))
+				/* Current illumination level is 0 */
+				len += sprintf(buf + len, "[none] ");
+			else
+				len += sprintf(buf + len, "[%s] ",
+					       illumination_modes[i]);
+		} else
+			len += sprintf(buf + len, "%s ",
+				       illumination_modes[i]);
+	}
+	len += sprintf(buf + len, "\n");
+
+	return len;
+}
+
+static DEVICE_ATTR(illumination_mode, S_IRUGO | S_IWUSR,
+		   kbd_led_mode_show, kbd_led_mode_store);
+
 static struct attribute *kbd_led_attrs[] = {
 	&dev_attr_illumination_timeout.attr,
+	&dev_attr_illumination_mode.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(kbd_led);
