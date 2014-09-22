@@ -814,7 +814,7 @@ static void kbd_led_send_request(enum kbd_led_request operation, u16 value)
 
 	buffer->input[0] = 0x2;
 	buffer->input[1] = buffer->output[1];
-	/* Exclude current ALS value */
+	/* Exclude current ALS value */ //FIXME: Needed?
 	buffer->input[2] = buffer->output[2] & ~(0xFF << 8);
 
 	if (operation == SET_LEVEL) {
@@ -822,6 +822,8 @@ static void kbd_led_send_request(enum kbd_led_request operation, u16 value)
 		if (value != 0 && buffer->input[1] & (1 << 0)) {
 			/* Make sure the illumination mode is not Always Off.
 			 * The backlight level won't change otherwise. */
+			// FIXME: is this an acceptable solution for all the laptops?
+			//        Should a supported mode be necessarily specified?
 			buffer->input[1] &= ~(0xFFFF);
 		}
 		buffer->input[2] &= ~(0xFF << 16);
@@ -871,6 +873,7 @@ static ssize_t kbd_led_timeout_store(struct device *dev,
 	max[3] = buffer->output[3] >> 24;
 	release_buffer();
 
+	// FIXME: only certain timeouts are supported
 	/* Convert timeout */
 	if (value <= max[0] && max[0]) {
 		value = clamp_t(int, value, 0, max[0]);
@@ -920,10 +923,11 @@ static DEVICE_ATTR(illumination_timeout, S_IRUGO | S_IWUSR,
 #define MODE_LEN 15
 static const char *illumination_modes[] = {
 	"none",
-	"always-on",
+	"always-on", // FIXME: How to detect if supported?
 	"als",
 	"als-input",
 	"input",
+	/* FIXME: Use these for brightness set? */
 	"input-25",
 	"input-50",
 	"input-75",
@@ -986,7 +990,7 @@ static ssize_t kbd_led_mode_show(struct device *dev,
 			continue;
 
 		if (enabled_modes & BIT(i)) {
-			if (!((buffer->output[2] >> 16) & 0xFF))
+			if (!((buffer->output[2] >> 16) & 0xFF)) // FIXME: Is this really needed?
 				/* Current illumination level is 0 */
 				len += sprintf(buf + len, "[none] ");
 			else
@@ -1138,6 +1142,8 @@ static bool __init kbd_led_supported(void)
 	      !(buffer->output[0]) &&
 	      ((buffer->output[2] >> 16) & 0xFF) &&
 	      ((buffer->output[1] >> 24) & 0xFF) == 2;
+
+	/*FIXME: Check also illumination mode? */
 
 	release_buffer();
 
