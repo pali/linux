@@ -1155,8 +1155,15 @@ static int __init kbd_led_init(struct device *dev)
 	return led_classdev_register(dev, &kbd_led);
 }
 
+static void brightness_set_exit(struct led_classdev *led_cdev,
+				enum led_brightness value)
+{
+	/* Don't change backlight level on exit */
+};
+
 static void kbd_led_exit(void)
 {
+	kbd_led.brightness_set = brightness_set_exit;
 	led_classdev_unregister(&kbd_led);
 }
 
