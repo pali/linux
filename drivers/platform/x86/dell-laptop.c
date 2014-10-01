@@ -32,6 +32,13 @@
 #include "../../firmware/dcdbas.h"
 
 #define BRIGHTNESS_TOKEN 0x7d
+#define KBD_LED_ON_TOKEN 0x01E1
+#define KBD_LED_OFF_TOKEN 0x01E2
+#define KBD_LED_AUTO_TOKEN 0x01E3
+#define KBD_LED_AUTO_25_TOKEN 0x02EA
+#define KBD_LED_AUTO_50_TOKEN 0x02EB
+#define KBD_LED_AUTO_75_TOKEN 0x02EC
+#define KBD_LED_AUTO_100_TOKEN 0x02F6
 
 /* This structure will be modified by the firmware when we enter
  * system management mode, hence the volatiles */
@@ -276,8 +283,6 @@ static struct page *bufferpage;
 static DEFINE_MUTEX(buffer_mutex);
 
 static int hwswitch_state;
-
-static bool kbd_led_present;
 
 static void get_buffer(void)
 {
@@ -792,105 +797,479 @@ static void touchpad_led_exit(void)
 	led_classdev_unregister(&touchpad_led);
 }
 
-enum kbd_led_request {
-	SET_LEVEL,
-	SET_TIMEOUT,
-	SET_MODE,
-	TRIGGER_ENABLE,
-	TRIGGER_DISABLE,
+/* Derived from information in smbios-keyboard-ctl:
+
+ cbClass 4
+ cbSelect 11
+ Keyboar illumination
+ cbArg1 determines the function to be performed
+
+ cbArg1 0x0 = Get Feature Information
+  cbRES1         Standard return codes (0, -1, -2)
+  cbRES2, word0  Bitmap of user-selectable modes
+     bit 0     Always off (All systems)
+     bit 1     Always on (Travis ATG, Siberia)
+     bit 2     Auto: ALS-based On; ALS-based Off (Travis ATG)
+     bit 3     Auto: ALS- and input-activity-based On; input-activity based Off
+     bit 4     Auto: Input-activity-based On; input-activity based Off
+     bit 5     Auto: Input-activity-based On (illumination level 25%); input-activity based Off
+     bit 6     Auto: Input-activity-based On (illumination level 50%); input-activity based Off
+     bit 7     Auto: Input-activity-based On (illumination level 75%); input-activity based Off
+     bit 8     Auto: Input-activity-based On (illumination level 100%); input-activity based Off
+     bits 9-15 Reserved for future use
+  cbRES2, byte2  Reserved for future use
+  cbRES2, byte3  Keyboard illumination type
+     0         Reserved
+     1         Tasklight
+     2         Backlight
+     3-255     Reserved for future use
+  cbRES3, byte0  Supported auto keyboard illumination trigger bitmap.
+     bit 0     Any keystroke
+     bit 1     Touchpad activity
+     bit 2     Pointing stick
+     bit 3     Any mouse
+     bits 4-7  Reserved for future use
+  cbRES3, byte1  Supported timeout unit bitmap
+     bit 0     Seconds
+     bit 1     Minutes
+     bit 2     Hours
+     bit 3     Days
+     bits 4-7  Reserved for future use
+  cbRES3, byte2  Number of keyboard light brightness levels
+  cbRES4, byte0  Maximum acceptable seconds value (0 if seconds not supported).
+  cbRES4, byte1  Maximum acceptable minutes value (0 if minutes not supported).
+  cbRES4, byte2  Maximum acceptable hours value (0 if hours not supported).
+  cbRES4, byte3  Maximum acceptable days value (0 if days not supported)
+
+ cbArg1 0x1 = Get Current State
+  cbRES1         Standard return codes (0, -1, -2)
+  cbRES2, word0  Bitmap of current mode state
+     bit 0     Always off (All systems)
+     bit 1     Always on (Travis ATG, Siberia)
+     bit 2     Auto: ALS-based On; ALS-based Off (Travis ATG)
+     bit 3     Auto: ALS- and input-activity-based On; input-activity based Off
+     bit 4     Auto: Input-activity-based On; input-activity based Off
+     bit 5     Auto: Input-activity-based On (illumination level 25%); input-activity based Off
+     bit 6     Auto: Input-activity-based On (illumination level 50%); input-activity based Off
+     bit 7     Auto: Input-activity-based On (illumination level 75%); input-activity based Off
+     bit 8     Auto: Input-activity-based On (illumination level 100%); input-activity based Off
+     bits 9-15 Reserved for future use
+     Note: Only One bit can be set
+  cbRES2, byte2  Currently active auto keyboard illumination triggers.
+     bit 0     Any keystroke
+     bit 1     Touchpad activity
+     bit 2     Pointing stick
+     bit 3     Any mouse
+     bits 4-7  Reserved for future use
+  cbRES2, byte3  Current Timeout
+     bits 7:6  Timeout units indicator:
+     00b       Seconds
+     01b       Minutes
+     10b       Hours
+     11b       Days
+     bits 5:0  Timeout value (0-63) in sec/min/hr/day
+     NOTE: A value of 0 means always on (no timeout) if any bits of RES3 byte
+     are set upon return from the [Get feature information] call.
+  cbRES3, byte0  Current setting of ALS value that turns the light on or off.
+  cbRES3, byte1  Current ALS reading
+  cbRES3, byte2  Current keyboard light level.
+
+ cbArg1 0x2 = Set New State
+  cbRES1         Standard return codes (0, -1, -2)
+  cbArg2, word0  Bitmap of current mode state
+     bit 0     Always off (All systems)
+     bit 1     Always on (Travis ATG, Siberia)
+     bit 2     Auto: ALS-based On; ALS-based Off (Travis ATG)
+     bit 3     Auto: ALS- and input-activity-based On; input-activity based Off
+     bit 4     Auto: Input-activity-based On; input-activity based Off
+     bit 5     Auto: Input-activity-based On (illumination level 25%); input-activity based Off
+     bit 6     Auto: Input-activity-based On (illumination level 50%); input-activity based Off
+     bit 7     Auto: Input-activity-based On (illumination level 75%); input-activity based Off
+     bit 8     Auto: Input-activity-based On (illumination level 100%); input-activity based Off
+     bits 9-15 Reserved for future use
+     Note: Only One bit can be set
+  cbArg2, byte2  Desired auto keyboard illumination triggers. Must remain inactive to allow
+                 keyboard to turn off automatically.
+     bit 0     Any keystroke
+     bit 1     Touchpad activity
+     bit 2     Pointing stick
+     bit 3     Any mouse
+     bits 4-7  Reserved for future use
+  cbArg2, byte3  Desired Timeout
+     bits 7:6  Timeout units indicator:
+     00b       Seconds
+     01b       Minutes
+     10b       Hours
+     11b       Days
+     bits 5:0  Timeout value (0-63) in sec/min/hr/day
+  cbArg3, byte0  Desired setting of ALS value that turns the light on or off.
+  cbArg3, byte2  Desired keyboard light level.
+*/
+
+
+enum kbd_timeout_unit {
+	KBD_TIMEOUT_SECONDS = 0,
+	KBD_TIMEOUT_MINUTES,
+	KBD_TIMEOUT_HOURS,
+	KBD_TIMEOUT_DAYS,
 };
 
-static void kbd_led_send_request(enum kbd_led_request operation, u16 value)
-{
+enum kbd_mode_bit {
+	KBD_MODE_BIT_OFF = 0,
+	KBD_MODE_BIT_ON,
+	KBD_MODE_BIT_ALS,
+	KBD_MODE_BIT_TRIGGER_ALS,
+	KBD_MODE_BIT_TRIGGER,
+	KBD_MODE_BIT_TRIGGER_25,
+	KBD_MODE_BIT_TRIGGER_50,
+	KBD_MODE_BIT_TRIGGER_75,
+	KBD_MODE_BIT_TRIGGER_100,
+};
+
+#define kbd_is_als_mode_bit(bit) \
+	((bit) == KBD_MODE_BIT_ALS || (bit) == KBD_MODE_BIT_TRIGGER_ALS)
+#define kbd_is_trigger_mode_bit(bit) \
+	((bit) >= KBD_MODE_BIT_TRIGGER_ALS && (bit) <= KBD_MODE_BIT_TRIGGER_100)
+#define kbd_is_level_mode_bit(bit) \
+	((bit) >= KBD_MODE_BIT_TRIGGER_25 && (bit) <= KBD_MODE_BIT_TRIGGER_100)
+
+struct kbd_info {
+	u16 modes;
+	u8 type;
+	u8 triggers;
+	u8 levels;
+	u8 seconds;
+	u8 minutes;
+	u8 hours;
+	u8 days;
+};
+
+struct kbd_state {
+	u8 mode_bit;
+	u8 triggers;
+	u8 timeout_value;
+	u8 timeout_unit;
+	u8 als_setting;
+	u8 als_value;
+	u8 level;
+};
+
+/* TODO: Add support for tokens as alternative way */
+
+static const int kbd_tokens[] = {
+	KBD_LED_ON_TOKEN,
+	KBD_LED_OFF_TOKEN,
+	KBD_LED_AUTO_TOKEN,
+	KBD_LED_AUTO_25_TOKEN,
+	KBD_LED_AUTO_50_TOKEN,
+	KBD_LED_AUTO_75_TOKEN,
+	KBD_LED_AUTO_100_TOKEN,
+};
+
+#define kbd_is_level_token_bit(bit) \
+	((bit) >= 3 && (bit) <= 6)
+
+static bool kbd_led_present;
+
+static u16 kbd_token_bits;
+static struct kbd_info kbd_info;
+static bool kbd_als_supported;
+static bool kbd_triggers_supported;
+
+static u8 kbd_mode_levels[16];
+static int kbd_mode_levels_count;
+
+static int kbd_tokens_levels[ARRAY_SIZE(kbd_tokens)];
+static int kbd_tokens_levels_count;
+
+static u8 kbd_previous_level;
+static u8 kbd_previous_mode_bit;
+
+static int kbd_get_info(struct kbd_info *info) {
+	u8 units;
+	int ret;
+
+	get_buffer();
+
+	buffer->input[0] = 0x0;
+	dell_send_request(buffer, 4, 11);
+	ret = buffer->output[0];
+
+	if (ret == 0) {
+		info->modes = buffer->output[1] & 0xFFFF;
+		info->type = (buffer->output[1] >> 24) & 0xFF;
+		info->triggers = buffer->output[2] & 0xFF;
+		units = (buffer->output[2] >> 8) & 0xFF;
+		info->levels = (buffer->output[2] >> 16) & 0xFF;
+		if (units & BIT(0))
+			info->seconds = (buffer->output[3] >> 0) & 0xFF;
+		if (units & BIT(1))
+			info->minutes = (buffer->output[3] >> 8) & 0xFF;
+		if (units & BIT(2))
+			info->days = (buffer->output[3] >> 16) & 0xFF;
+		if (units & BIT(3))
+			info->hours = (buffer->output[3] >> 24) & 0xFF;
+	}
+
+	release_buffer();
+
+	if (ret == 0)
+		return 0;
+	else
+		return -EINVAL;
+}
+
+static unsigned int kbd_get_max_level(void) {
+	if (kbd_info.levels != 0)
+		return kbd_info.levels;
+	if (kbd_mode_levels_count > 0)
+		return kbd_mode_levels_count-1;
+	return 0;
+}
+
+static int kbd_get_level(struct kbd_state *state) {
+	int i;
+
+	if (kbd_info.levels != 0)
+		return state->level;
+
+	if (kbd_mode_levels_count > 0) {
+		for (i = 0; i < kbd_mode_levels_count; ++i)
+			if (kbd_mode_levels[i] == state->mode_bit)
+				return i;
+		return 0;
+	}
+
+	return -EINVAL;
+}
+
+static int kbd_set_level(struct kbd_state *state, u8 level) {
+	if (kbd_info.levels != 0) {
+		if (level != 0)
+			kbd_previous_level = level;
+		if (state->level == level)
+			return 0;
+		state->level = level;
+		if (level != 0 && state->mode_bit == KBD_MODE_BIT_OFF)
+			state->mode_bit = kbd_previous_mode_bit;
+		else if (level == 0 && state->mode_bit != KBD_MODE_BIT_OFF) {
+			kbd_previous_mode_bit = state->mode_bit;
+			state->mode_bit = KBD_MODE_BIT_OFF;
+		}
+		return 0;
+	}
+
+	if (kbd_mode_levels_count > 0 && level < kbd_mode_levels_count) {
+		if (level != 0)
+			kbd_previous_level = level;
+		state->mode_bit = kbd_mode_levels[level];
+		return 0;
+	}
+
+	return -EINVAL;
+}
+
+static int kbd_get_state(struct kbd_state *state) {
+	int ret;
+
 	get_buffer();
 
 	buffer->input[0] = 0x1;
 	dell_send_request(buffer, 4, 11);
-	if (buffer->output[0]) {
-		pr_err("Failed to get current keyboard backlight "
-		       "configuration (%d)\n", buffer->output[0]);
-		goto out;
+	ret = buffer->output[0];
+
+	if (ret == 0) {
+		state->mode_bit = ffs(buffer->output[1] & 0xFFFF);
+		if (state->mode_bit != 0) state->mode_bit--;
+		state->triggers = (buffer->output[1] >> 16) & 0xFF;
+		state->timeout_value = (buffer->output[1] >> 24) & 0x3F;
+		state->timeout_unit = (buffer->output[1] >> 30) & 0x3;
+		state->als_setting = buffer->output[2] & 0xFF;
+		state->als_value = (buffer->output[2] >> 8) & 0xFF;
+		state->level = (buffer->output[2] >> 16) & 0xFF;
 	}
 
-	buffer->input[0] = 0x2;
-	buffer->input[1] = buffer->output[1];
-	/* Exclude current ALS value */ //FIXME: Needed?
-	buffer->input[2] = buffer->output[2] & ~(0xFF << 8);
-
-	if (operation == SET_LEVEL) {
-		buffer->input[1] = buffer->output[1];
-		if (value != 0 && buffer->input[1] & (1 << 0)) {
-			/* Make sure the illumination mode is not Always Off.
-			 * The backlight level won't change otherwise. */
-			// FIXME: is this an acceptable solution for all the laptops?
-			//        Should a supported mode be necessarily specified?
-			buffer->input[1] &= ~(0xFFFF);
-		}
-		buffer->input[2] &= ~(0xFF << 16);
-		buffer->input[2] |= value << 16;
-	} else if (operation == SET_TIMEOUT) {
-		buffer->input[1] &= ~(0xFF << 24);
-		buffer->input[1] |= value << 24;
-	} else if (operation == SET_MODE) {
-		buffer->input[1] &= ~(0xFFFF);
-		buffer->input[1] |= value;
-		/* If current mode is Always off and level is 0,
-		 * set level to 1 */
-		if ((buffer->output[1] & BIT(0)) == 1 &&
-		    !(buffer->output[2] & (0xFF << 16)))
-			buffer->input[2] |= 1 << 16;
-	} else if (operation == TRIGGER_ENABLE) {
-		buffer->input[1] |= value << 16;
-	} else if (operation == TRIGGER_DISABLE) {
-		buffer->input[1] &= ~(value << 16);
-	}
-	dell_send_request(buffer, 4, 11);
-	if (buffer->output[0]) {
-		pr_err("Failed to set keyboard backlight configuration (%d)\n",
-		       buffer->output[0]);
-		goto out;
-	}
-
-out:
 	release_buffer();
+
+	if (ret == 0)
+		return 0;
+	else
+		return -EINVAL;
+}
+
+static int kbd_set_state(struct kbd_state *state) {
+	int ret;
+
+	get_buffer();
+	buffer->input[0] = 0x2;
+	buffer->input[1] = BIT(state->mode_bit) & 0xFFFF;
+	buffer->input[1] |= (state->triggers & 0xFF) << 16;
+	buffer->input[1] |= (state->timeout_value & 0x3F) << 24;
+	buffer->input[1] |= (state->timeout_unit & 0x3) << 30;
+	buffer->input[2] = state->als_setting & 0xFF;
+	buffer->input[2] |= (state->level & 0xFF) << 16;
+	dell_send_request(buffer, 4, 11);
+	ret = buffer->output[0];
+	release_buffer();
+
+	if (ret == 0)
+		return 0;
+	else
+		return -EINVAL;
+}
+
+static int kbd_set_state_safe(struct kbd_state *state, struct kbd_state *old) {
+	int ret;
+
+	ret = kbd_set_state(state);
+	if (ret == 0)
+		return 0;
+
+	if (kbd_set_state(old))
+		pr_err("Setting old previous keyboard state failed\n");
+
+	return ret;
+}
+
+static int kbd_set_token_bit(u8 bit) {
+	int token;
+	int ret;
+
+	if (bit >= ARRAY_SIZE(kbd_tokens))
+		return -EINVAL;
+
+	token = find_token_location(kbd_tokens[bit]);
+
+	if (token == -1)
+		return -EINVAL;
+
+	get_buffer();
+	buffer->input[0] = token;
+	buffer->input[1] = 1;
+	dell_send_request(buffer, 1, 0);
+	ret = buffer->output[0];
+	release_buffer();
+
+	if (ret == 0)
+		return 0;
+	else
+		return -EINVAL;
+}
+
+static void kbd_init(void) {
+	struct kbd_state state;
+	int ret;
+	int i;
+
+	ret = kbd_get_info(&kbd_info);
+
+	if (ret == 0) {
+
+		kbd_get_state(&state);
+
+		/* FIXME: Fix kbd_info.modes */
+		kbd_info.modes &= ~BIT(KBD_MODE_BIT_ON); /* TODO: disable ON mode for now */
+
+		kbd_previous_level = kbd_get_level(&state);
+		kbd_previous_mode_bit = state.mode_bit;
+
+		if (kbd_previous_level == 0) {
+			if (kbd_get_max_level() != 0)
+				kbd_previous_level = 1;
+		}
+
+		if (kbd_previous_mode_bit == KBD_MODE_BIT_OFF) {
+			kbd_previous_mode_bit = ffs(kbd_info.modes & ~BIT(KBD_MODE_BIT_OFF));
+			if (kbd_previous_mode_bit != 0)
+				kbd_previous_mode_bit--;
+		}
+
+		if (kbd_info.modes & (BIT(KBD_MODE_BIT_ALS) | BIT(KBD_MODE_BIT_TRIGGER_ALS)))
+			kbd_als_supported = true;
+
+		if (kbd_info.modes & (
+		     BIT(KBD_MODE_BIT_TRIGGER_ALS) | BIT(KBD_MODE_BIT_TRIGGER) |
+		     BIT(KBD_MODE_BIT_TRIGGER_25) | BIT(KBD_MODE_BIT_TRIGGER_50) |
+		     BIT(KBD_MODE_BIT_TRIGGER_75) | BIT(KBD_MODE_BIT_TRIGGER_100)
+		   ))
+			kbd_triggers_supported = true;
+
+		for (i = 0; i < 16; ++i)
+			if (kbd_is_level_mode_bit(i) && (BIT(i) & kbd_info.modes))
+				kbd_mode_levels[1+kbd_mode_levels_count++] = i;
+
+		if (kbd_mode_levels_count > 0) {
+			for (i = 0; i < 16; ++i) {
+				if ((BIT(i) & kbd_info.modes)) {
+					kbd_mode_levels[0] = i;
+					break;
+				}
+			}
+			kbd_mode_levels_count++;
+		}
+
+	}
+
+	for (i = 0; i < ARRAY_SIZE(kbd_tokens); ++i)
+		if (find_token_location(kbd_tokens[i]) != -1)
+			kbd_token_bits |= BIT(i);
+
+	if (kbd_token_bits != 0 || ret == 0)
+		kbd_led_present = true;
 }
 
 static ssize_t kbd_led_timeout_store(struct device *dev,
 				     struct device_attribute *attr,
 				     const char *buf, size_t count)
 {
+	struct kbd_state state;
+	struct kbd_state new_state;
+	int ret;
+	char ch;
+	u8 unit;
 	int value;
-	u8 max[4] = { 0 };
 
-	sscanf(buf, "%d\n", &value);
+	ret = sscanf(buf, "%d %c", &value, &ch);
+	if (ret < 1)
+		return -EINVAL;
+	else if (ret == 1)
+		ch = 's';
 
-	get_buffer();
-	buffer->input[0] = 0x0;
-	dell_send_request(buffer, 4, 11);
-	max[0] = buffer->output[3];
-	max[1] = buffer->output[3] >> 8;
-	max[2] = buffer->output[3] >> 16;
-	max[3] = buffer->output[3] >> 24;
-	release_buffer();
+	if (value < 0 || value > 63)
+		return -EINVAL;
 
-	// FIXME: only certain timeouts are supported
-	/* Convert timeout */
-	if (value <= max[0] && max[0]) {
-		value = clamp_t(int, value, 0, max[0]);
-	} else if (value/60 <= max[1] && max[1]) {
-		value /= value/60;
-		value |= 1 << 6;
-	} else if (value/(60*60) <= max[2] && max[2]) {
-		value /= (60*60);
-		value |= 2 << 6;
-	} else if (value/(60*60*24) <= max[3] && max[3]) {
-		value /= (60*60*24);
-		value |= 3 << 6;
-	} else {
+	switch (ch) {
+	case 's':
+		if (value > kbd_info.seconds) return -EINVAL;
+		unit = KBD_TIMEOUT_SECONDS;
+		break;
+	case 'm':
+		if (value > kbd_info.minutes) return -EINVAL;
+		unit = KBD_TIMEOUT_MINUTES;
+		break;
+	case 'h':
+		if (value > kbd_info.hours) return -EINVAL;
+		unit = KBD_TIMEOUT_HOURS;
+		break;
+	case 'd':
+		if (value > kbd_info.days) return -EINVAL;
+		unit = KBD_TIMEOUT_DAYS;
+		break;
+	default:
 		return -EINVAL;
 	}
 
-	kbd_led_send_request(SET_TIMEOUT, value);
+	ret = kbd_get_state(&state);
+	if (ret)
+		return ret;
+
+	new_state = state;
+	new_state.timeout_value = value;
+	new_state.timeout_unit = unit;
+
+	ret = kbd_set_state_safe(&new_state, &state);
+	if (ret)
+		return ret;
 
 	return count;
 }
@@ -898,223 +1277,313 @@ static ssize_t kbd_led_timeout_store(struct device *dev,
 static ssize_t kbd_led_timeout_show(struct device *dev,
 				    struct device_attribute *attr, char *buf)
 {
+	struct kbd_state state;
 	int ret;
+	int len;
 
-	get_buffer();
-	buffer->input[0] = 0x1;
-	dell_send_request(buffer, 4, 11);
-	ret = (buffer->output[1] >> 24) & 0xFF;
-	release_buffer();
+	ret = kbd_get_state(&state);
+	if (ret)
+		return ret;
 
-	/* Convert timeout */
-	if (ret & (1 << 6))
-		ret = (ret & 0x1F)*60;
-	else if (ret & (2 << 6))
-		ret = (ret & 0x1F)*60*60;
-	else if (ret & (3 << 6))
-		ret = (ret & 0x1F)*60*60*24;
+	len = sprintf(buf, "%d", state.timeout_value);
 
-	return sprintf(buf, "%d\n", ret);
-}
-
-static DEVICE_ATTR(illumination_timeout, S_IRUGO | S_IWUSR,
-		   kbd_led_timeout_show, kbd_led_timeout_store);
-
-#define MODE_LEN 15
-static const char *illumination_modes[] = {
-	"none",
-	"always-on", // FIXME: How to detect if supported?
-	"als",
-	"als-input",
-	"input",
-	/* FIXME: Use these for brightness set? */
-	"input-25",
-	"input-50",
-	"input-75",
-	"input-100"
-};
-
-static ssize_t kbd_led_mode_store(struct device *dev,
-				  struct device_attribute *attr,
-				  const char *buf, size_t count)
-{
-	u16 supported_modes;
-	char mode[MODE_LEN + 1];
-	int i;
-
-	i = sscanf(buf, "%15s", mode); /* MODE_LEN */
-	if (i != 1)
+	switch (state.timeout_unit) {
+	case KBD_TIMEOUT_SECONDS:
+		return len + sprintf(buf+len, "s\n");
+	case KBD_TIMEOUT_MINUTES:
+		return len + sprintf(buf+len, "m\n");
+	case KBD_TIMEOUT_HOURS:
+		return len + sprintf(buf+len, "h\n");
+	case KBD_TIMEOUT_DAYS:
+		return len + sprintf(buf+len, "d\n");
+	default:
 		return -EINVAL;
-
-	get_buffer();
-	buffer->input[0] = 0x0;
-	dell_send_request(buffer, 4, 11);
-	supported_modes = buffer->output[1];
-	release_buffer();
-
-	for (i = 0; i < ARRAY_SIZE(illumination_modes); i++)
-		if (!strnicmp(mode, illumination_modes[i], MODE_LEN))
-			break;
-
-	if (i > ARRAY_SIZE(illumination_modes))
-		return -EINVAL;
-
-	if (!(supported_modes & BIT(i)))
-		return -EINVAL;
-
-	kbd_led_send_request(SET_MODE, 1 << i);
-
-	return count;
-}
-
-static ssize_t kbd_led_mode_show(struct device *dev,
-				 struct device_attribute *attr, char *buf)
-{
-	u16 enabled_modes;
-	u16 supported_modes;
-	int len = 0;
-	int i;
-
-	get_buffer();
-	buffer->input[0] = 0x0;
-	dell_send_request(buffer, 4, 11);
-	supported_modes = buffer->output[1];
-
-	buffer->input[0] = 0x1;
-	dell_send_request(buffer, 4, 11);
-	enabled_modes = buffer->output[1];
-	release_buffer();
-
-	for (i = 0; i < ARRAY_SIZE(illumination_modes); i++) {
-		if (!(supported_modes & BIT(i)))
-			continue;
-
-		if (enabled_modes & BIT(i)) {
-			if (!((buffer->output[2] >> 16) & 0xFF)) // FIXME: Is this really needed?
-				/* Current illumination level is 0 */
-				len += sprintf(buf + len, "[none] ");
-			else
-				len += sprintf(buf + len, "[%s] ",
-					       illumination_modes[i]);
-		} else
-			len += sprintf(buf + len, "%s ",
-				       illumination_modes[i]);
 	}
-	len += sprintf(buf + len, "\n");
 
 	return len;
 }
 
-static DEVICE_ATTR(illumination_mode, S_IRUGO | S_IWUSR,
-		   kbd_led_mode_show, kbd_led_mode_store);
+static DEVICE_ATTR(stop_timeout, S_IRUGO | S_IWUSR,
+		   kbd_led_timeout_show, kbd_led_timeout_store);
 
-#define TRIGGER_LEN 20
-static const char *triggers[] = {
-	"keystroke",
+static const char *kbd_led_triggers[] = {
+	"keyboard",
 	"touchpad",
-	"pointing-stick",
-	"mouse"
+	/*"trackstick"*/ NULL, /* FIXME: trackstick is same as touchpad */
+	"mouse",
 };
 
 static ssize_t kbd_led_triggers_store(struct device *dev,
 				      struct device_attribute *attr,
 				      const char *buf, size_t count)
 {
-	u8 supported_triggers;
-	char trigger[TRIGGER_LEN + 1];
+	struct kbd_state state;
+	struct kbd_state new_state;
+	char trigger[21];
+	bool als_enabled;
+	bool triggers_enabled;
+	bool enable_als;
+	bool disable_als;
+	int trigger_bit;
 	int i;
+	int ret;
 
-	i = sscanf(buf, "%20s", trigger); /* TRIGGER_LEN */
-	if (i != 1)
+	ret = sscanf(buf, "%20s", trigger);
+	if (ret != 1)
 		return -EINVAL;
 
-	if (!(trigger[0] == '+' || trigger[0] == '-'))
+	if (trigger[0] != '+' && trigger[0] != '-')
 		return -EINVAL;
 
-	get_buffer();
-	buffer->input[0] = 0x0;
-	dell_send_request(buffer, 4, 11);
-	supported_triggers = buffer->output[2];
-	release_buffer();
+	ret = kbd_get_state(&state);
+	if (ret)
+		return ret;
 
-	for (i = 0; i < ARRAY_SIZE(triggers); i++)
-		if (!strnicmp(trigger + 1, triggers[i], TRIGGER_LEN))
-			break;
-
-	if (i > ARRAY_SIZE(triggers))
-		return -EINVAL;
-
-	if (!(supported_triggers & BIT(i)))
-		return -EINVAL;
-
-	if (trigger[0] == '+')
-		kbd_led_send_request(TRIGGER_ENABLE, 1 << i);
+	if (kbd_als_supported)
+		als_enabled = kbd_is_als_mode_bit(state.mode_bit);
 	else
-		kbd_led_send_request(TRIGGER_DISABLE, 1 << i);
+		als_enabled = false;
 
-	return count;
+	if (kbd_triggers_supported)
+		triggers_enabled = kbd_is_trigger_mode_bit(state.mode_bit);
+	else
+		triggers_enabled = false;
+
+	enable_als = false;
+	disable_als = false;
+
+	if (kbd_als_supported) {
+		if (strcmp(trigger, "+als") == 0) {
+			if (als_enabled)
+				return count;
+			else
+				enable_als = true;
+		} else if (strcmp(trigger, "-als") == 0) {
+			if (!als_enabled)
+				return count;
+			else
+				disable_als = true;
+		}
+	}
+
+	if (enable_als || disable_als) {
+		new_state = state;
+		if (enable_als) {
+			if (triggers_enabled)
+				new_state.mode_bit = KBD_MODE_BIT_TRIGGER_ALS;
+			else
+				new_state.mode_bit = KBD_MODE_BIT_ALS;
+		} else {
+			if (triggers_enabled) {
+				new_state.mode_bit = KBD_MODE_BIT_TRIGGER;
+				kbd_set_level(&new_state, kbd_previous_level);
+			} else
+				new_state.mode_bit = KBD_MODE_BIT_ON;
+		}
+		if (!(kbd_info.modes & BIT(new_state.mode_bit)))
+			return -EINVAL;
+		ret = kbd_set_state_safe(&new_state, &state);
+		if (ret)
+			return ret;
+		kbd_previous_mode_bit = new_state.mode_bit;
+		return count;
+	}
+
+	trigger_bit = -1;
+
+	if (kbd_triggers_supported) {
+		for (i = 0; i < ARRAY_SIZE(kbd_led_triggers); ++i) {
+			if (!(kbd_info.triggers & BIT(i)))
+				continue;
+			if (!kbd_led_triggers[i])
+				continue;
+			if (strcmp(trigger+1, kbd_led_triggers[i]) != 0)
+				continue;
+			if (trigger[0] == '+' && triggers_enabled && (state.triggers & BIT(i)))
+				return count;
+			if (trigger[0] == '-' && (!triggers_enabled || !(state.triggers & BIT(i))))
+				return count;
+			trigger_bit = i;
+			break;
+		}
+	}
+
+	if (trigger_bit != -1) {
+		new_state = state;
+		if (trigger[0] == '+')
+			new_state.triggers |= BIT(trigger_bit);
+		else {
+			new_state.triggers &= ~BIT(trigger_bit);
+			if (trigger_bit == 1) /* FIXME: trackstick must be disabled to when disabling touchpad */
+				new_state.triggers &= ~BIT(2);
+		}
+		if ((kbd_info.triggers & new_state.triggers) != new_state.triggers)
+			return -EINVAL;
+		if (new_state.triggers && !triggers_enabled) {
+			if (als_enabled)
+				new_state.mode_bit = KBD_MODE_BIT_TRIGGER_ALS;
+			else {
+				new_state.mode_bit = KBD_MODE_BIT_TRIGGER;
+				kbd_set_level(&new_state, kbd_previous_level);
+			}
+		} else if (new_state.triggers == 0) {
+			if (als_enabled)
+				new_state.mode_bit = KBD_MODE_BIT_ALS;
+			else
+				kbd_set_level(&new_state, 0);
+		}
+		if (!(kbd_info.modes & BIT(new_state.mode_bit)))
+			return -EINVAL;
+		ret = kbd_set_state_safe(&new_state, &state);
+		if (ret)
+			return ret;
+		if (new_state.mode_bit != KBD_MODE_BIT_OFF)
+			kbd_previous_mode_bit = new_state.mode_bit;
+		return count;
+	}
+
+	return -EINVAL;
 }
 
 static ssize_t kbd_led_triggers_show(struct device *dev,
 				     struct device_attribute *attr, char *buf)
 {
-	u8 enabled_triggers;
-	u8 supported_triggers;
-	int len = 0;
+	struct kbd_state state;
+	bool triggers_enabled;
+	int level;
 	int i;
+	int ret;
+	int len;
 
-	get_buffer();
-	buffer->input[0] = 0x0;
-	dell_send_request(buffer, 4, 11);
-	supported_triggers = buffer->output[2];
+	ret = kbd_get_state(&state);
+	if (ret)
+		return ret;
 
-	buffer->input[0] = 0x1;
-	dell_send_request(buffer, 4, 11);
-	enabled_triggers = buffer->output[1] >> 16;
-	release_buffer();
+	len = 0;
 
-	for (i = 0; i < ARRAY_SIZE(triggers); i++) {
-		if (!(supported_triggers & BIT(i)))
-			continue;
-
-		if (enabled_triggers & BIT(i))
-			len += sprintf(buf + len, "+%s ", triggers[i]);
-		else
-			len += sprintf(buf + len, "-%s ", triggers[i]);
+	if (kbd_triggers_supported) {
+		triggers_enabled = kbd_is_trigger_mode_bit(state.mode_bit);
+		level = kbd_get_level(&state);
+		for (i = 0; i < ARRAY_SIZE(kbd_led_triggers); ++i) {
+			if (!(kbd_info.triggers & BIT(i)))
+				continue;
+			if (!kbd_led_triggers[i])
+				continue;
+			if ((triggers_enabled || level <= 0) && state.triggers & BIT(i))
+				len += sprintf(buf+len, "+%s ", kbd_led_triggers[i]);
+			else
+				len += sprintf(buf+len, "-%s ", kbd_led_triggers[i]);
+		}
 	}
-	len += sprintf(buf + len, "\n");
+
+	if (kbd_als_supported) {
+		if (kbd_is_als_mode_bit(state.mode_bit))
+			len += sprintf(buf+len, "+als ");
+		else
+			len += sprintf(buf+len, "-als ");
+	}
+
+	if (len)
+		buf[len-1] = '\n';
 
 	return len;
 }
 
-static DEVICE_ATTR(illumination_triggers, S_IRUGO | S_IWUSR,
+static DEVICE_ATTR(start_triggers, S_IRUGO | S_IWUSR,
 		   kbd_led_triggers_show, kbd_led_triggers_store);
 
+static ssize_t kbd_led_als_store(struct device *dev,
+				 struct device_attribute *attr,
+				 const char *buf, size_t count)
+{
+	struct kbd_state state;
+	struct kbd_state new_state;
+	int setting;
+	int ret;
+
+	ret = sscanf(buf, "%d", &setting);
+	if (ret != 1)
+		return -EINVAL;
+
+	if (setting < 0 || setting > 127)
+		return -EINVAL;
+
+	ret = kbd_get_state(&state);
+	if (ret)
+		return ret;
+
+	new_state = state;
+	new_state.als_setting = setting;
+
+	ret = kbd_set_state_safe(&new_state, &state);
+	if (ret)
+		return ret;
+
+	return count;
+}
+
+static ssize_t kbd_led_als_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct kbd_state state;
+	int ret;
+
+	ret = kbd_get_state(&state);
+	if (ret)
+		return ret;
+
+	return sprintf(buf, "%d\n", state.als_setting);
+}
+
+static DEVICE_ATTR(als_setting, S_IRUGO | S_IWUSR,
+		   kbd_led_als_show, kbd_led_als_store);
+
 static struct attribute *kbd_led_attrs[] = {
-	&dev_attr_illumination_timeout.attr,
-	&dev_attr_illumination_mode.attr,
-	&dev_attr_illumination_triggers.attr,
+	&dev_attr_stop_timeout.attr,
+	&dev_attr_start_triggers.attr,
+	&dev_attr_als_setting.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(kbd_led);
 
 static enum led_brightness kbd_led_level_get(struct led_classdev *led_cdev)
 {
-	int level;
+	int ret;
+	struct kbd_state state;
 
-	get_buffer();
-	buffer->input[0] = 0x1;
-	dell_send_request(buffer, 4, 11);
-	level = (buffer->output[2] >> 16) & 0xFF;
-	release_buffer();
+	ret = kbd_get_state(&state);
+	if (ret)
+		return 0;
 
-	return level;
+	ret = kbd_get_level(&state);
+	if (ret < 0)
+		return 0;
+
+	return ret;
 }
 
 static void kbd_led_level_set(struct led_classdev *led_cdev,
 			      enum led_brightness value)
 {
-	kbd_led_send_request(SET_LEVEL, value);
+	struct kbd_state state;
+	struct kbd_state new_state;
+	int ret;
+
+	if (value > kbd_get_max_level())
+		return;
+
+	ret = kbd_get_state(&state);
+	if (ret)
+		return;
+
+	new_state = state;
+	ret = kbd_set_level(&new_state, value);
+	if (ret)
+		return;
+
+	ret = kbd_set_state_safe(&new_state, &state);
+	if (ret)
+		return;
 }
 
 static struct led_classdev kbd_led = {
@@ -1124,40 +1593,12 @@ static struct led_classdev kbd_led = {
 	.groups         = kbd_led_groups,
 };
 
-static bool __init kbd_led_supported(void)
-{
-	int ret;
-
-	get_buffer();
-
-	buffer->input[0] = 0x1;
-	dell_send_request(buffer, 4, 11);
-	ret = !(buffer->output[0]);
-
-	buffer->input[0] = 0x0;
-	dell_send_request(buffer, 4, 11);
-	/* Not supported if max illumination level is 0
-	 * and illumination type is not backlight */
-	ret = ret &&
-	      !(buffer->output[0]) &&
-	      ((buffer->output[2] >> 16) & 0xFF) &&
-	      ((buffer->output[1] >> 24) & 0xFF) == 2;
-
-	/*FIXME: Check also illumination mode? */
-
-	release_buffer();
-
-	return ret;
-}
-
 static int __init kbd_led_init(struct device *dev)
 {
-	get_buffer();
-	buffer->input[0] = 0x0;
-	dell_send_request(buffer, 4, 11);
-	kbd_led.max_brightness = (buffer->output[2] >> 16) & 0xFF;
-	release_buffer();
-
+	kbd_init();
+	if (!kbd_led_present)
+		return -ENODEV;
+	kbd_led.max_brightness = kbd_get_max_level();
 	return led_classdev_register(dev, &kbd_led);
 }
 
@@ -1169,6 +1610,8 @@ static void brightness_set_exit(struct led_classdev *led_cdev,
 
 static void kbd_led_exit(void)
 {
+	if (!kbd_led_present)
+		return;
 	kbd_led.brightness_set = brightness_set_exit;
 	led_classdev_unregister(&kbd_led);
 }
@@ -1225,9 +1668,7 @@ static int __init dell_init(void)
 	if (quirks && quirks->touchpad_led)
 		touchpad_led_init(&platform_device->dev);
 
-	if (kbd_led_supported())
-		if (!kbd_led_init(&platform_device->dev))
-			kbd_led_present = true;
+	kbd_led_init(&platform_device->dev);
 
 	dell_laptop_dir = debugfs_create_dir("dell_laptop", NULL);
 	if (dell_laptop_dir != NULL)
@@ -1296,8 +1737,7 @@ static void __exit dell_exit(void)
 	debugfs_remove_recursive(dell_laptop_dir);
 	if (quirks && quirks->touchpad_led)
 		touchpad_led_exit();
-	if (kbd_led_present)
-		kbd_led_exit();
+	kbd_led_exit();
 	i8042_remove_filter(dell_laptop_i8042_filter);
 	cancel_delayed_work_sync(&dell_rfkill_work);
 	backlight_device_unregister(dell_backlight_device);
