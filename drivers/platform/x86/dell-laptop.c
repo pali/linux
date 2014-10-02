@@ -1235,27 +1235,37 @@ static ssize_t kbd_led_timeout_store(struct device *dev,
 	else if (ret == 1)
 		ch = 's';
 
-	if (value < 0 || value > 63)
+	if (value < 0)
 		return -EINVAL;
 
 	switch (ch) {
 	case 's':
-		if (value > kbd_info.seconds) return -EINVAL;
-		unit = KBD_TIMEOUT_SECONDS;
 		break;
 	case 'm':
-		if (value > kbd_info.minutes) return -EINVAL;
-		unit = KBD_TIMEOUT_MINUTES;
+		value *= 60;
 		break;
 	case 'h':
-		if (value > kbd_info.hours) return -EINVAL;
-		unit = KBD_TIMEOUT_HOURS;
+		value *= 60*60;
 		break;
 	case 'd':
-		if (value > kbd_info.days) return -EINVAL;
-		unit = KBD_TIMEOUT_DAYS;
+		value *= 60*60*24;
 		break;
 	default:
+		return -EINVAL;
+	}
+
+	if (value <= kbd_info.seconds && kbd_info.seconds) {
+		unit = KBD_TIMEOUT_SECONDS;
+	} else if (value/60 <= kbd_info.minutes && kbd_info.minutes) {
+		value /= 60;
+		unit = KBD_TIMEOUT_MINUTES;
+	} else if (value/(60*60) <= kbd_info.hours && kbd_info.hours) {
+		value /= (60*60);
+		unit = KBD_TIMEOUT_HOURS;
+	} else if (value/(60*60*24) <= kbd_info.days && kbd_info.days) {
+		value /= (60*60*24);
+		unit = KBD_TIMEOUT_DAYS;
+	} else {
 		return -EINVAL;
 	}
 
