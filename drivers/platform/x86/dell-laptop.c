@@ -69,6 +69,10 @@ struct calling_interface_structure {
 
 struct quirk_entry {
 	u8 touchpad_led;
+
+	/* Ordered list of timeouts expressed in seconds.
+	 * The list must end with -1 */
+	int kbd_timeouts[];
 };
 
 static struct quirk_entry *quirks;
@@ -82,6 +86,10 @@ static int __init dmi_matched(const struct dmi_system_id *dmi)
 	quirks = dmi->driver_data;
 	return 1;
 }
+
+static struct quirk_entry quirk_dell_xps13_9333 = {
+	.kbd_timeouts = { 0, 5, 15, 60, 5*60, 15*60, -1 },
+};
 
 static int da_command_address;
 static int da_command_code;
@@ -274,6 +282,15 @@ static const struct dmi_system_id dell_quirks[] __initconst = {
 			DMI_MATCH(DMI_PRODUCT_NAME, "Inspiron 7720"),
 		},
 		.driver_data = &quirk_dell_vostro_v130,
+	},
+	{
+		.callback = dmi_matched,
+		.ident = "Dell XPS13 9333",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "XPS13 9333"),
+		},
+		.driver_data = &quirk_dell_xps13_9333,
 	},
 	{ }
 };
@@ -1228,6 +1245,7 @@ static ssize_t kbd_led_timeout_store(struct device *dev,
 	char ch;
 	u8 unit;
 	int value;
+	int i;
 
 	ret = sscanf(buf, "%d %c", &value, &ch);
 	if (ret < 1)
@@ -1252,6 +1270,15 @@ static ssize_t kbd_led_timeout_store(struct device *dev,
 		break;
 	default:
 		return -EINVAL;
+	}
+
+	if (quirks && quirks->kbd_timeouts) {
+		for (i = 0; quirks->kbd_timeouts[i] != -1; i++) {
+			if (value <= quirks->kbd_timeouts[i]) {
+				value = quirks->kbd_timeouts[i];
+				break;
+			}
+		}
 	}
 
 	if (value <= kbd_info.seconds && kbd_info.seconds) {
