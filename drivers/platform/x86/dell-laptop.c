@@ -1252,6 +1252,7 @@ static ssize_t kbd_led_timeout_store(struct device *dev,
 	struct kbd_state state;
 	struct kbd_state new_state;
 	int ret;
+	bool convert;
 	char ch;
 	u8 unit;
 	int value;
@@ -1266,44 +1267,70 @@ static ssize_t kbd_led_timeout_store(struct device *dev,
 	if (value < 0)
 		return -EINVAL;
 
+	convert = false;
+
 	switch (ch) {
 	case 's':
+		if (value > kbd_info.seconds)
+			convert = true;
+		unit = KBD_TIMEOUT_SECONDS;
 		break;
 	case 'm':
-		value *= 60;
+		if (value > kbd_info.minutes)
+			convert = true;
+		unit = KBD_TIMEOUT_MINUTES;
 		break;
 	case 'h':
-		value *= 60*60;
+		if (value > kbd_info.hours)
+			convert = true;
+		unit = KBD_TIMEOUT_HOURS;
 		break;
 	case 'd':
-		value *= 60*60*24;
+		if (value > kbd_info.days)
+			convert = true;
+		unit = KBD_TIMEOUT_DAYS;
 		break;
 	default:
 		return -EINVAL;
 	}
 
-	if (quirks && quirks->kbd_timeouts) {
-		for (i = 0; quirks->kbd_timeouts[i] != -1; i++) {
-			if (value <= quirks->kbd_timeouts[i]) {
-				value = quirks->kbd_timeouts[i];
-				break;
+	if (quirks && quirks->kbd_timeouts)
+		convert = true;
+
+	if (convert) {
+		switch (unit) {
+			case KBD_TIMEOUT_DAYS:
+				value *= 24;
+			case KBD_TIMEOUT_HOURS:
+				value *= 60;
+			case KBD_TIMEOUT_MINUTES:
+				value *= 60;
+				unit = KBD_TIMEOUT_SECONDS;
+		}
+
+		if (quirks && quirks->kbd_timeouts) {
+			for (i = 0; quirks->kbd_timeouts[i] != -1; i++) {
+				if (value <= quirks->kbd_timeouts[i]) {
+					value = quirks->kbd_timeouts[i];
+					break;
+				}
 			}
 		}
-	}
 
-	if (value <= kbd_info.seconds && kbd_info.seconds) {
-		unit = KBD_TIMEOUT_SECONDS;
-	} else if (value/60 <= kbd_info.minutes && kbd_info.minutes) {
-		value /= 60;
-		unit = KBD_TIMEOUT_MINUTES;
-	} else if (value/(60*60) <= kbd_info.hours && kbd_info.hours) {
-		value /= (60*60);
-		unit = KBD_TIMEOUT_HOURS;
-	} else if (value/(60*60*24) <= kbd_info.days && kbd_info.days) {
-		value /= (60*60*24);
-		unit = KBD_TIMEOUT_DAYS;
-	} else {
-		return -EINVAL;
+		if (value <= kbd_info.seconds && kbd_info.seconds) {
+			unit = KBD_TIMEOUT_SECONDS;
+		} else if (value/60 <= kbd_info.minutes && kbd_info.minutes) {
+			value /= 60;
+			unit = KBD_TIMEOUT_MINUTES;
+		} else if (value/(60*60) <= kbd_info.hours && kbd_info.hours) {
+			value /= (60*60);
+			unit = KBD_TIMEOUT_HOURS;
+		} else if (value/(60*60*24) <= kbd_info.days && kbd_info.days) {
+			value /= (60*60*24);
+			unit = KBD_TIMEOUT_DAYS;
+		} else {
+			return -EINVAL;
+		}
 	}
 
 	ret = kbd_get_state(&state);
