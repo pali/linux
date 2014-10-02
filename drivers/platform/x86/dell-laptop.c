@@ -1643,9 +1643,6 @@ static void kbd_led_level_set(struct led_classdev *led_cdev,
 	struct kbd_state new_state;
 	int ret;
 
-	if (value > kbd_get_max_level())
-		return;
-
 	ret = kbd_get_state(&state);
 	if (ret)
 		return;
