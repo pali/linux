@@ -1625,6 +1625,11 @@ static enum led_brightness kbd_led_level_get(struct led_classdev *led_cdev)
 	int ret;
 	struct kbd_state state;
 
+	if (!kbd_get_max_level()) {
+		pr_warn("Keyboard brightness level control not supported\n");
+		return 0;
+	}
+
 	ret = kbd_get_state(&state);
 	if (ret)
 		return 0;
@@ -1642,6 +1647,11 @@ static void kbd_led_level_set(struct led_classdev *led_cdev,
 	struct kbd_state state;
 	struct kbd_state new_state;
 	int ret;
+
+	if (!kbd_get_max_level()) {
+		pr_warn("Keyboard brightness level control not supported\n");
+		return;
+	}
 
 	ret = kbd_get_state(&state);
 	if (ret)
