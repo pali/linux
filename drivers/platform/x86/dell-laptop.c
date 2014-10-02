@@ -1023,9 +1023,9 @@ static int kbd_get_info(struct kbd_info *info) {
 		if (units & BIT(1))
 			info->minutes = (buffer->output[3] >> 8) & 0xFF;
 		if (units & BIT(2))
-			info->days = (buffer->output[3] >> 16) & 0xFF;
+			info->hours = (buffer->output[3] >> 16) & 0xFF;
 		if (units & BIT(3))
-			info->hours = (buffer->output[3] >> 24) & 0xFF;
+			info->days = (buffer->output[3] >> 24) & 0xFF;
 	}
 
 	release_buffer();
