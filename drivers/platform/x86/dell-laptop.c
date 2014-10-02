@@ -1184,6 +1184,16 @@ static void kbd_init(void) {
 
 		kbd_get_state(&state);
 
+		/* NOTE: timeout value is stored in 6 bits, so max value is 63 */
+		if (kbd_info.seconds > 63)
+			kbd_info.seconds = 63;
+		if (kbd_info.minutes > 63)
+			kbd_info.minutes = 63;
+		if (kbd_info.hours > 63)
+			kbd_info.hours = 63;
+		if (kbd_info.days > 63)
+			kbd_info.days = 63;
+
 		/* FIXME: Fix kbd_info.modes */
 		kbd_info.modes &= ~BIT(KBD_MODE_BIT_ON); /* TODO: disable ON mode for now */
 
