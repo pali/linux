@@ -32,8 +32,8 @@
 #include "../../firmware/dcdbas.h"
 
 #define BRIGHTNESS_TOKEN 0x7d
-#define KBD_LED_ON_TOKEN 0x01E1
-#define KBD_LED_OFF_TOKEN 0x01E2
+#define KBD_LED_OFF_TOKEN 0x01E1
+#define KBD_LED_ON_TOKEN 0x01E2
 #define KBD_LED_AUTO_TOKEN 0x01E3
 #define KBD_LED_AUTO_25_TOKEN 0x02EA
 #define KBD_LED_AUTO_50_TOKEN 0x02EB
