@@ -375,8 +375,8 @@ static int find_token_location(int tokenid)
 	id = find_token_id(tokenid);
 	if (id == -1)
 		return -1;
-	else
-		return da_tokens[id].location;
+
+	return da_tokens[id].location;
 }
 
 static struct calling_interface_buffer *
@@ -1006,7 +1006,8 @@ static int kbd_mode_levels_count;
 static u8 kbd_previous_level;
 static u8 kbd_previous_mode_bit;
 
-static int kbd_get_info(struct kbd_info *info) {
+static int kbd_get_info(struct kbd_info *info)
+{
 	u8 units;
 	int ret;
 
@@ -1034,13 +1035,14 @@ static int kbd_get_info(struct kbd_info *info) {
 
 	release_buffer();
 
-	if (ret == 0)
-		return 0;
-	else
+	if (ret)
 		return -EINVAL;
+
+	return 0;
 }
 
-static unsigned int kbd_get_max_level(void) {
+static unsigned int kbd_get_max_level(void)
+{
 	if (kbd_info.levels != 0)
 		return kbd_info.levels;
 	if (kbd_mode_levels_count > 0)
@@ -1048,7 +1050,8 @@ static unsigned int kbd_get_max_level(void) {
 	return 0;
 }
 
-static int kbd_get_level(struct kbd_state *state) {
+static int kbd_get_level(struct kbd_state *state)
+{
 	int i;
 
 	if (kbd_info.levels != 0)
@@ -1064,7 +1067,8 @@ static int kbd_get_level(struct kbd_state *state) {
 	return -EINVAL;
 }
 
-static int kbd_set_level(struct kbd_state *state, u8 level) {
+static int kbd_set_level(struct kbd_state *state, u8 level)
+{
 	if (kbd_info.levels != 0) {
 		if (level != 0)
 			kbd_previous_level = level;
@@ -1090,7 +1094,8 @@ static int kbd_set_level(struct kbd_state *state, u8 level) {
 	return -EINVAL;
 }
 
-static int kbd_get_state(struct kbd_state *state) {
+static int kbd_get_state(struct kbd_state *state)
+{
 	int ret;
 
 	get_buffer();
@@ -1101,7 +1106,8 @@ static int kbd_get_state(struct kbd_state *state) {
 
 	if (ret == 0) {
 		state->mode_bit = ffs(buffer->output[1] & 0xFFFF);
-		if (state->mode_bit != 0) state->mode_bit--;
+		if (state->mode_bit != 0)
+			state->mode_bit--;
 		state->triggers = (buffer->output[1] >> 16) & 0xFF;
 		state->timeout_value = (buffer->output[1] >> 24) & 0x3F;
 		state->timeout_unit = (buffer->output[1] >> 30) & 0x3;
@@ -1112,13 +1118,14 @@ static int kbd_get_state(struct kbd_state *state) {
 
 	release_buffer();
 
-	if (ret == 0)
-		return 0;
-	else
+	if (ret)
 		return -EINVAL;
+
+	return 0;
 }
 
-static int kbd_set_state(struct kbd_state *state) {
+static int kbd_set_state(struct kbd_state *state)
+{
 	int ret;
 
 	get_buffer();
@@ -1133,13 +1140,14 @@ static int kbd_set_state(struct kbd_state *state) {
 	ret = buffer->output[0];
 	release_buffer();
 
-	if (ret == 0)
-		return 0;
-	else
+	if (ret)
 		return -EINVAL;
+
+	return 0;
 }
 
-static int kbd_set_state_safe(struct kbd_state *state, struct kbd_state *old) {
+static int kbd_set_state_safe(struct kbd_state *state, struct kbd_state *old)
+{
 	int ret;
 
 	ret = kbd_set_state(state);
@@ -1152,7 +1160,8 @@ static int kbd_set_state_safe(struct kbd_state *state, struct kbd_state *old) {
 	return ret;
 }
 
-static int kbd_set_token_bit(u8 bit) {
+static int kbd_set_token_bit(u8 bit)
+{
 	int id;
 	int ret;
 
@@ -1170,13 +1179,14 @@ static int kbd_set_token_bit(u8 bit) {
 	ret = buffer->output[0];
 	release_buffer();
 
-	if (ret != 0)
+	if (ret)
 		return -EINVAL;
-	else
-		return 0;
+
+	return 0;
 }
 
-static int kbd_get_token_bit(u8 bit) {
+static int kbd_get_token_bit(u8 bit)
+{
 	int id;
 	int ret;
 	int val;
@@ -1195,16 +1205,14 @@ static int kbd_get_token_bit(u8 bit) {
 	val = buffer->output[1];
 	release_buffer();
 
-	if (ret != 0)
+	if (ret)
 		return -EINVAL;
 
-	if (val == da_tokens[id].value)
-		return 1;
-	else
-		return 0;
+	return (val == da_tokens[id].value);
 }
 
-static int kbd_get_first_active_token_bit(void) {
+static int kbd_get_first_active_token_bit(void)
+{
 	int i;
 	int ret;
 
@@ -1222,7 +1230,8 @@ static int kbd_get_valid_token_counts(void)
 	return hweight16(kbd_token_bits);
 }
 
-static void kbd_init(void) {
+static void kbd_init(void)
+{
 	struct kbd_state state;
 	int ret;
 	int i;
@@ -1233,7 +1242,7 @@ static void kbd_init(void) {
 
 		kbd_get_state(&state);
 
-		/* NOTE: timeout value is stored in 6 bits, so max value is 63 */
+		/* NOTE: timeout value is stored in 6 bits so max value is 63 */
 		if (kbd_info.seconds > 63)
 			kbd_info.seconds = 63;
 		if (kbd_info.minutes > 63)
@@ -1243,8 +1252,10 @@ static void kbd_init(void) {
 		if (kbd_info.days > 63)
 			kbd_info.days = 63;
 
-		/* FIXME: Fix kbd_info.modes */
-		kbd_info.modes &= ~BIT(KBD_MODE_BIT_ON); /* TODO: disable ON mode for now */
+		/* NOTE: On tested machines ON mode did not work and caused
+		 *       problems (turned backlight off) so do not use it
+		 */
+		kbd_info.modes &= ~BIT(KBD_MODE_BIT_ON);
 
 		kbd_previous_level = kbd_get_level(&state);
 		kbd_previous_mode_bit = state.mode_bit;
@@ -1255,23 +1266,26 @@ static void kbd_init(void) {
 		}
 
 		if (kbd_previous_mode_bit == KBD_MODE_BIT_OFF) {
-			kbd_previous_mode_bit = ffs(kbd_info.modes & ~BIT(KBD_MODE_BIT_OFF));
+			kbd_previous_mode_bit =
+				ffs(kbd_info.modes & ~BIT(KBD_MODE_BIT_OFF));
 			if (kbd_previous_mode_bit != 0)
 				kbd_previous_mode_bit--;
 		}
 
-		if (kbd_info.modes & (BIT(KBD_MODE_BIT_ALS) | BIT(KBD_MODE_BIT_TRIGGER_ALS)))
+		if (kbd_info.modes & (BIT(KBD_MODE_BIT_ALS) |
+				      BIT(KBD_MODE_BIT_TRIGGER_ALS)))
 			kbd_als_supported = true;
 
 		if (kbd_info.modes & (
-		     BIT(KBD_MODE_BIT_TRIGGER_ALS) | BIT(KBD_MODE_BIT_TRIGGER) |
-		     BIT(KBD_MODE_BIT_TRIGGER_25) | BIT(KBD_MODE_BIT_TRIGGER_50) |
-		     BIT(KBD_MODE_BIT_TRIGGER_75) | BIT(KBD_MODE_BIT_TRIGGER_100)
+		    BIT(KBD_MODE_BIT_TRIGGER_ALS) | BIT(KBD_MODE_BIT_TRIGGER) |
+		    BIT(KBD_MODE_BIT_TRIGGER_25) | BIT(KBD_MODE_BIT_TRIGGER_50) |
+		    BIT(KBD_MODE_BIT_TRIGGER_75) | BIT(KBD_MODE_BIT_TRIGGER_100)
 		   ))
 			kbd_triggers_supported = true;
 
 		for (i = 0; i < 16; ++i)
-			if (kbd_is_level_mode_bit(i) && (BIT(i) & kbd_info.modes))
+			if (kbd_is_level_mode_bit(i) &&
+			    (BIT(i) & kbd_info.modes))
 				kbd_mode_levels[1+kbd_mode_levels_count++] = i;
 
 		if (kbd_mode_levels_count > 0) {
@@ -1347,14 +1361,15 @@ static ssize_t kbd_led_timeout_store(struct device *dev,
 		convert = true;
 
 	if (convert) {
+		/* NOTE: this switch fall down */
 		switch (unit) {
-			case KBD_TIMEOUT_DAYS:
-				value *= 24;
-			case KBD_TIMEOUT_HOURS:
-				value *= 60;
-			case KBD_TIMEOUT_MINUTES:
-				value *= 60;
-				unit = KBD_TIMEOUT_SECONDS;
+		case KBD_TIMEOUT_DAYS:
+			value *= 24;
+		case KBD_TIMEOUT_HOURS:
+			value *= 60;
+		case KBD_TIMEOUT_MINUTES:
+			value *= 60;
+			unit = KBD_TIMEOUT_SECONDS;
 		}
 
 		if (quirks && quirks->kbd_timeouts) {
@@ -1429,10 +1444,10 @@ static ssize_t kbd_led_timeout_show(struct device *dev,
 static DEVICE_ATTR(stop_timeout, S_IRUGO | S_IWUSR,
 		   kbd_led_timeout_show, kbd_led_timeout_store);
 
-static const char *kbd_led_triggers[] = {
+static const char * const kbd_led_triggers[] = {
 	"keyboard",
 	"touchpad",
-	/*"trackstick"*/ NULL, /* FIXME: trackstick is same as touchpad */
+	/*"trackstick"*/ NULL, /* NOTE: trackstick is just alias for touchpad */
 	"mouse",
 };
 
@@ -1479,13 +1494,11 @@ static ssize_t kbd_led_triggers_store(struct device *dev,
 		if (strcmp(trigger, "+als") == 0) {
 			if (als_enabled)
 				return count;
-			else
-				enable_als = true;
+			enable_als = true;
 		} else if (strcmp(trigger, "-als") == 0) {
 			if (!als_enabled)
 				return count;
-			else
-				disable_als = true;
+			disable_als = true;
 		}
 	}
 
@@ -1522,9 +1535,11 @@ static ssize_t kbd_led_triggers_store(struct device *dev,
 				continue;
 			if (strcmp(trigger+1, kbd_led_triggers[i]) != 0)
 				continue;
-			if (trigger[0] == '+' && triggers_enabled && (state.triggers & BIT(i)))
+			if (trigger[0] == '+' &&
+			    triggers_enabled && (state.triggers & BIT(i)))
 				return count;
-			if (trigger[0] == '-' && (!triggers_enabled || !(state.triggers & BIT(i))))
+			if (trigger[0] == '-' &&
+			    (!triggers_enabled || !(state.triggers & BIT(i))))
 				return count;
 			trigger_bit = i;
 			break;
@@ -1537,10 +1552,14 @@ static ssize_t kbd_led_triggers_store(struct device *dev,
 			new_state.triggers |= BIT(trigger_bit);
 		else {
 			new_state.triggers &= ~BIT(trigger_bit);
-			if (trigger_bit == 1) /* FIXME: trackstick must be disabled to when disabling touchpad */
+			/* NOTE: trackstick bit (2) must be disabled when
+			 *       disabling touchpad bit (1), otherwise touchpad
+			 *       bit (1) will not be disabled */
+			if (trigger_bit == 1)
 				new_state.triggers &= ~BIT(2);
 		}
-		if ((kbd_info.triggers & new_state.triggers) != new_state.triggers)
+		if ((kbd_info.triggers & new_state.triggers) !=
+		    new_state.triggers)
 			return -EINVAL;
 		if (new_state.triggers && !triggers_enabled) {
 			if (als_enabled)
@@ -1592,10 +1611,12 @@ static ssize_t kbd_led_triggers_show(struct device *dev,
 				continue;
 			if (!kbd_led_triggers[i])
 				continue;
-			if ((triggers_enabled || level <= 0) && state.triggers & BIT(i))
-				len += sprintf(buf+len, "+%s ", kbd_led_triggers[i]);
+			if ((triggers_enabled || level <= 0) &&
+			    (state.triggers & BIT(i)))
+				buf[len++] = '+';
 			else
-				len += sprintf(buf+len, "-%s ", kbd_led_triggers[i]);
+				buf[len++] = '-';
+			len += sprintf(buf+len, "%s ", kbd_led_triggers[i]);
 		}
 	}
 
@@ -1621,15 +1642,12 @@ static ssize_t kbd_led_als_store(struct device *dev,
 {
 	struct kbd_state state;
 	struct kbd_state new_state;
-	int setting;
+	u8 setting;
 	int ret;
 
-	ret = sscanf(buf, "%d", &setting);
-	if (ret != 1)
-		return -EINVAL;
-
-	if (setting < 0 || setting > 127)
-		return -EINVAL;
+	ret = kstrtou8(buf, 10, &setting);
+	if (ret)
+		return ret;
 
 	ret = kbd_get_state(&state);
 	if (ret)
