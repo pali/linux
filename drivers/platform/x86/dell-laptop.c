@@ -356,15 +356,27 @@ static void __init find_tokens(const struct dmi_header *dm, void *dummy)
 	}
 }
 
-static int find_token_location(int tokenid)
+static int find_token_id(int tokenid)
 {
 	int i;
+
 	for (i = 0; i < da_num_tokens; i++) {
 		if (da_tokens[i].tokenID == tokenid)
-			return da_tokens[i].location;
+			return i;
 	}
 
 	return -1;
+}
+
+static int find_token_location(int tokenid)
+{
+	int id;
+
+	id = find_token_id(tokenid);
+	if (id == -1)
+		return -1;
+	else
+		return da_tokens[id].location;
 }
 
 static struct calling_interface_buffer *
@@ -971,20 +983,15 @@ struct kbd_state {
 	u8 level;
 };
 
-/* TODO: Add support for tokens as alternative way */
-
 static const int kbd_tokens[] = {
-	KBD_LED_ON_TOKEN,
 	KBD_LED_OFF_TOKEN,
-	KBD_LED_AUTO_TOKEN,
 	KBD_LED_AUTO_25_TOKEN,
 	KBD_LED_AUTO_50_TOKEN,
 	KBD_LED_AUTO_75_TOKEN,
 	KBD_LED_AUTO_100_TOKEN,
+	KBD_LED_AUTO_TOKEN,
+	KBD_LED_ON_TOKEN,
 };
-
-#define kbd_is_level_token_bit(bit) \
-	((bit) >= 3 && (bit) <= 6)
 
 static bool kbd_led_present;
 
@@ -995,9 +1002,6 @@ static bool kbd_triggers_supported;
 
 static u8 kbd_mode_levels[16];
 static int kbd_mode_levels_count;
-
-static int kbd_tokens_levels[ARRAY_SIZE(kbd_tokens)];
-static int kbd_tokens_levels_count;
 
 static u8 kbd_previous_level;
 static u8 kbd_previous_mode_bit;
@@ -1149,28 +1153,73 @@ static int kbd_set_state_safe(struct kbd_state *state, struct kbd_state *old) {
 }
 
 static int kbd_set_token_bit(u8 bit) {
-	int token;
+	int id;
 	int ret;
 
 	if (bit >= ARRAY_SIZE(kbd_tokens))
 		return -EINVAL;
 
-	token = find_token_location(kbd_tokens[bit]);
-
-	if (token == -1)
+	id = find_token_id(kbd_tokens[bit]);
+	if (id == -1)
 		return -EINVAL;
 
 	get_buffer();
-	buffer->input[0] = token;
-	buffer->input[1] = 1;
+	buffer->input[0] = da_tokens[id].location;
+	buffer->input[1] = da_tokens[id].value;
 	dell_send_request(buffer, 1, 0);
 	ret = buffer->output[0];
 	release_buffer();
 
-	if (ret == 0)
-		return 0;
-	else
+	if (ret != 0)
 		return -EINVAL;
+	else
+		return 0;
+}
+
+static int kbd_get_token_bit(u8 bit) {
+	int id;
+	int ret;
+	int val;
+
+	if (bit >= ARRAY_SIZE(kbd_tokens))
+		return -EINVAL;
+
+	id = find_token_id(kbd_tokens[bit]);
+	if (id == -1)
+		return -EINVAL;
+
+	get_buffer();
+	buffer->input[0] = da_tokens[id].location;
+	dell_send_request(buffer, 0, 0);
+	ret = buffer->output[0];
+	val = buffer->output[1];
+	release_buffer();
+
+	if (ret != 0)
+		return -EINVAL;
+
+	if (val == da_tokens[id].value)
+		return 1;
+	else
+		return 0;
+}
+
+static int kbd_get_first_active_token_bit(void) {
+	int i;
+	int ret;
+
+	for (i = 0; i < ARRAY_SIZE(kbd_tokens); ++i) {
+		ret = kbd_get_token_bit(i);
+		if (ret == 1)
+			return i;
+	}
+
+	return ret;
+}
+
+static int kbd_get_valid_token_counts(void)
+{
+	return hweight16(kbd_token_bits);
 }
 
 static void kbd_init(void) {
@@ -1227,7 +1276,7 @@ static void kbd_init(void) {
 
 		if (kbd_mode_levels_count > 0) {
 			for (i = 0; i < 16; ++i) {
-				if ((BIT(i) & kbd_info.modes)) {
+				if (BIT(i) & kbd_info.modes) {
 					kbd_mode_levels[0] = i;
 					break;
 				}
@@ -1238,7 +1287,7 @@ static void kbd_init(void) {
 	}
 
 	for (i = 0; i < ARRAY_SIZE(kbd_tokens); ++i)
-		if (find_token_location(kbd_tokens[i]) != -1)
+		if (find_token_id(kbd_tokens[i]) != -1)
 			kbd_token_bits |= BIT(i);
 
 	if (kbd_token_bits != 0 || ret == 0)
@@ -1625,18 +1674,21 @@ static enum led_brightness kbd_led_level_get(struct led_classdev *led_cdev)
 	int ret;
 	struct kbd_state state;
 
-	if (!kbd_get_max_level()) {
+	if (kbd_get_max_level()) {
+		ret = kbd_get_state(&state);
+		if (ret)
+			return 0;
+		ret = kbd_get_level(&state);
+		if (ret < 0)
+			return 0;
+	} else if (kbd_get_valid_token_counts()) {
+		ret = kbd_get_first_active_token_bit();
+		if (ret < 0)
+			return 0;
+	} else {
 		pr_warn("Keyboard brightness level control not supported\n");
 		return 0;
 	}
-
-	ret = kbd_get_state(&state);
-	if (ret)
-		return 0;
-
-	ret = kbd_get_level(&state);
-	if (ret < 0)
-		return 0;
 
 	return ret;
 }
@@ -1648,23 +1700,24 @@ static void kbd_led_level_set(struct led_classdev *led_cdev,
 	struct kbd_state new_state;
 	int ret;
 
-	if (!kbd_get_max_level()) {
+	if (kbd_get_max_level()) {
+		ret = kbd_get_state(&state);
+		if (ret)
+			return;
+
+		new_state = state;
+		ret = kbd_set_level(&new_state, value);
+		if (ret)
+			return;
+
+		ret = kbd_set_state_safe(&new_state, &state);
+		if (ret)
+			return;
+	} else if (kbd_get_valid_token_counts()) {
+		ret = kbd_set_token_bit(value);
+	} else {
 		pr_warn("Keyboard brightness level control not supported\n");
-		return;
 	}
-
-	ret = kbd_get_state(&state);
-	if (ret)
-		return;
-
-	new_state = state;
-	ret = kbd_set_level(&new_state, value);
-	if (ret)
-		return;
-
-	ret = kbd_set_state_safe(&new_state, &state);
-	if (ret)
-		return;
 }
 
 static struct led_classdev kbd_led = {
@@ -1680,6 +1733,11 @@ static int __init kbd_led_init(struct device *dev)
 	if (!kbd_led_present)
 		return -ENODEV;
 	kbd_led.max_brightness = kbd_get_max_level();
+	if (!kbd_led.max_brightness) {
+		kbd_led.max_brightness = kbd_get_valid_token_counts();
+		if (kbd_led.max_brightness)
+			kbd_led.max_brightness--;
+	}
 	return led_classdev_register(dev, &kbd_led);
 }
 
