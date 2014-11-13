@@ -997,9 +997,8 @@ static const int kbd_tokens[] = {
 */
 };
 
-static bool kbd_led_present;
-
 static u16 kbd_token_bits;
+
 static struct kbd_info kbd_info;
 static bool kbd_als_supported;
 static bool kbd_triggers_supported;
@@ -1009,6 +1008,8 @@ static int kbd_mode_levels_count;
 
 static u8 kbd_previous_level;
 static u8 kbd_previous_mode_bit;
+
+static bool kbd_led_present;
 
 static int kbd_get_info(struct kbd_info *info)
 {
@@ -1050,7 +1051,7 @@ static unsigned int kbd_get_max_level(void)
 	if (kbd_info.levels != 0)
 		return kbd_info.levels;
 	if (kbd_mode_levels_count > 0)
-		return kbd_mode_levels_count-1;
+		return kbd_mode_levels_count - 1;
 	return 0;
 }
 
@@ -1632,7 +1633,7 @@ static ssize_t kbd_led_triggers_show(struct device *dev,
 	}
 
 	if (len)
-		buf[len-1] = '\n';
+		buf[len - 1] = '\n';
 
 	return len;
 }
@@ -1704,6 +1705,7 @@ static enum led_brightness kbd_led_level_get(struct led_classdev *led_cdev)
 		ret = kbd_get_level(&state);
 		if (ret < 0)
 			return 0;
+		return ret;
 	} else if (kbd_get_valid_token_counts()) {
 		ret = kbd_get_first_active_token_bit();
 		if (ret < 0)
@@ -1717,8 +1719,6 @@ static enum led_brightness kbd_led_level_get(struct led_classdev *led_cdev)
 		pr_warn("Keyboard brightness level control not supported\n");
 		return 0;
 	}
-
-	return ret;
 }
 
 static void kbd_led_level_set(struct led_classdev *led_cdev,
@@ -1726,22 +1726,15 @@ static void kbd_led_level_set(struct led_classdev *led_cdev,
 {
 	struct kbd_state state;
 	struct kbd_state new_state;
-	int ret;
 	u16 num;
 
 	if (kbd_get_max_level()) {
-		ret = kbd_get_state(&state);
-		if (ret)
+		if (kbd_get_state(&state))
 			return;
-
 		new_state = state;
-		ret = kbd_set_level(&new_state, value);
-		if (ret)
+		if (kbd_set_level(&new_state, value))
 			return;
-
-		ret = kbd_set_state_safe(&new_state, &state);
-		if (ret)
-			return;
+		kbd_set_state_safe(&new_state, &state);
 	} else if (kbd_get_valid_token_counts()) {
 		for (num = kbd_token_bits; num != 0 && value > 0; --value)
 			num &= num - 1; /* clear the first bit set */
