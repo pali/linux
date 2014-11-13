@@ -1692,6 +1692,7 @@ ATTRIBUTE_GROUPS(kbd_led);
 static enum led_brightness kbd_led_level_get(struct led_classdev *led_cdev)
 {
 	int ret;
+	u16 num;
 	struct kbd_state state;
 
 	if (kbd_get_max_level()) {
@@ -1705,6 +1706,11 @@ static enum led_brightness kbd_led_level_get(struct led_classdev *led_cdev)
 		ret = kbd_get_first_active_token_bit();
 		if (ret < 0)
 			return 0;
+		for (num = kbd_token_bits; num != 0 && ret > 0; --ret)
+			num &= num - 1; /* clear the first bit set */
+		if (num == 0)
+			return 0;
+		return ffs(num) - 1;
 	} else {
 		pr_warn("Keyboard brightness level control not supported\n");
 		return 0;
@@ -1719,6 +1725,7 @@ static void kbd_led_level_set(struct led_classdev *led_cdev,
 	struct kbd_state state;
 	struct kbd_state new_state;
 	int ret;
+	u16 num;
 
 	if (kbd_get_max_level()) {
 		ret = kbd_get_state(&state);
@@ -1734,7 +1741,11 @@ static void kbd_led_level_set(struct led_classdev *led_cdev,
 		if (ret)
 			return;
 	} else if (kbd_get_valid_token_counts()) {
-		ret = kbd_set_token_bit(value);
+		for (num = kbd_token_bits; num != 0 && value > 0; --value)
+			num &= num - 1; /* clear the first bit set */
+		if (num == 0)
+			return;
+		kbd_set_token_bit(ffs(num) - 1);
 	} else {
 		pr_warn("Keyboard brightness level control not supported\n");
 	}
