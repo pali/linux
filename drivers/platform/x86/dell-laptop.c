@@ -991,10 +991,7 @@ static const int kbd_tokens[] = {
 	KBD_LED_AUTO_50_TOKEN,
 	KBD_LED_AUTO_75_TOKEN,
 	KBD_LED_AUTO_100_TOKEN,
-/* FIXME: Disabled for now until somebody tests these tokens if they are working
-	KBD_LED_AUTO_TOKEN,
 	KBD_LED_ON_TOKEN,
-*/
 };
 
 static u16 kbd_token_bits;
